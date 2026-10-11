@@ -61,7 +61,9 @@ jobs:
             echo "No need to commit"
           else
             git commit -m "⏱️ Auto Update by Github Actions: $(TZ=Asia/Shanghai date +'%Y-%m-%d %H:%M:%S')"
-            git pull --rebase origin main || true
+            # 拉取并变基到最新 main；time.txt 冲突时自动保留本次写入的新时间戳
+            # （rebase 中 ours=远端、theirs=本地提交，故用 -X theirs）
+            git pull --rebase origin main -X theirs || git rebase --abort
             git push origin main
           fi
 
