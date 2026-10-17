@@ -1,24 +1,29 @@
 ## 🚀 lunes host 自动登录续期（GitHub Actions）
 
-这是一个基于 GitHub Actions 的多账号自动化脚本，用于定时登录自动续期[lunes host](https://betadash.lunes.host/) 应用。
+这是一个基于 GitHub Actions 的自动化脚本，用于定时登录自动续期[lunes host](https://betadash.lunes.host/) 应用。
 
 ⚠️ 有cf盾,太垃圾的机房节点可能过不了，建议用稍微干净点的节点 
 
 ━━━━━━━━━━━━━━━━━━━━━━
 
-🔐 Secrets 配置说明(在原作基础上增加第2账号的保活支持，优化了签到方式防黑号)
+🔐 Secrets 配置说明(单账号保活，通知改为飞书推送)
 
 | Secret 名称         | 是否必填 | 说明                                              |
 |---------------------|----------|---------------------------------------------------|
-| LUNES_EMAIL     | ✅ 必填  | lunes 登录邮箱1🇺🇸                                 |
-| LUNES_PASSWORD  | ✅ 必填  | lunes 登录密码1                                   | 
-| LUNES_EMAIL1     | ❌ 可选  | lunes 登录邮箱2🇩🇪                                |
-| LUNES_PASSWORD1  | ❌ 可选   | lunes 登录密码2                                  | 
-| NODE_LINK       | ❌ 可选  | 代理链接，如 vless:// vmess:// tuic:// hysteria2:// anttls:// socks5://|
-| TG_BOT_TOKEN    | ❌ 可选  | Telegram Bot Token（用于发送通知）                     |
-| TG_CHAT_ID      | ❌ 可选  | Telegram Chat ID（接收通知的用户或群组 ID）              |
+| LUNES_EMAIL         | ✅ 必填  | lunes 登录邮箱                                     |
+| LUNES_PASSWORD      | ✅ 必填  | lunes 登录密码                                    | 
+| FEISHU_WEBHOOK_URL  | ❌ 可选  | 飞书自定义机器人 Webhook 地址（用于发送通知）        |
+| FEISHU_SECRET       | ❌ 可选  | 飞书机器人签名密钥（机器人未开启签名校验则不填）      |
+| NODE_LINK           | ❌ 可选  | 代理链接，如 vless:// vmess:// tuic:// hysteria2:// anttls:// socks5://|
 
 ━━━━━━━━━━━━━━━━━━━━━━
+
+### 飞书通知配置方法
+
+1. 在飞书群聊中添加「自定义机器人」（群设置 → 群机器人 → 添加机器人 → 自定义机器人）
+2. 复制机器人 Webhook 地址（形如 `https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx`），配置到 Secret `FEISHU_WEBHOOK_URL`
+3. 若机器人安全设置勾选了「签名校验」，将签名密钥配置到 Secret `FEISHU_SECRET`；未开启则留空
+
 ### 代理格式（确认在v2rayN里使用正常的节点）
 
 `NODE_LINK` 支持以下任意一种代理协议的完整分享链接（不配置则直连）：
