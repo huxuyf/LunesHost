@@ -3,33 +3,24 @@
 
 import os
 import time
+import base64
+import hashlib
+import hmac
 import subprocess
 import requests
 import re
-import random
 from seleniumbase import SB
 
-# 从环境变量获取账号密码和 TG 配置
-EMAIL        = os.environ.get("LUNES_EMAIL") or ""     # 登录邮箱（账号1）
-PASSWORD     = os.environ.get("LUNES_PASSWORD") or ""  # 登录密码（账号1）
-TG_CHAT_ID   = os.environ.get("TG_CHAT_ID") or ""      # chat id,可选
-TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN") or ""    # bot token,可选
-
-# 🆕 新增：账号2 环境变量（可选；不配置时自动跳过，行为与单账号版一致）
-EMAIL1       = os.environ.get("LUNES_EMAIL1") or ""    # 登录邮箱（账号2）
-PASSWORD1    = os.environ.get("LUNES_PASSWORD1") or "" # 登录密码（账号2）
-
-# 🆕 新增：账号列表——只收集「邮箱+密码都齐全」的账号，main 里依次执行
-ACCOUNTS = []
-if EMAIL and PASSWORD:
-    ACCOUNTS.append({"name": "账号1", "email": EMAIL,  "password": PASSWORD,  "shot": "acc1", "flag": "🇺🇸"})
-if EMAIL1 and PASSWORD1:
-    ACCOUNTS.append({"name": "账号2", "email": EMAIL1, "password": PASSWORD1, "shot": "acc2", "flag": "🇩🇪"})
+# 从环境变量获取账号密码和飞书通知配置
+EMAIL              = os.environ.get("LUNES_EMAIL") or ""       # 登录邮箱
+PASSWORD           = os.environ.get("LUNES_PASSWORD") or ""    # 登录密码
+FEISHU_WEBHOOK_URL = os.environ.get("FEISHU_WEBHOOK_URL") or ""  # 飞书自定义机器人 webhook，可选
+FEISHU_SECRET      = os.environ.get("FEISHU_SECRET") or ""       # 飞书机器人签名密钥，可选
 
 LOGIN_URL = "https://betadash.lunes.host/login?next=/"
 
-# 🆕 新增：邮箱掩码抽成独立函数（原内联在 send_tg_message 中且读全局 EMAIL，多账号需各自掩码）
 def mask_email(email: str) -> str:
+    """邮箱掩码：用户名部分保留前2后2，中间打码"""
     if '@' in email:
         name, domain = email.split('@', 1)
         if len(name) > 4:
@@ -39,38 +30,47 @@ def mask_email(email: str) -> str:
     else:
         return email[:2] + '****'
 
-#  Telegram 推送
-# 🆕 修改：新增 email / name / flag 入参（原函数读取全局 EMAIL），推送文案带账号标识与国旗
-def send_tg_message(status_icon, status_text, extra_text="", email="", name="", flag="🇺🇸"):
-    if not TG_BOT_TOKEN or not TG_CHAT_ID:
-        print("ℹ️ 未配置 TG_BOT_TOKEN 或 TG_CHAT_ID，跳过 Telegram 推送。")
+#  飞书推送（自定义机器人 webhook，支持可选的签名校验）
+def send_feishu_message(status_icon, status_text, extra_text=""):
+    if not FEISHU_WEBHOOK_URL:
+        print("ℹ️ 未配置 FEISHU_WEBHOOK_URL，跳过飞书推送。")
         return
 
     local_time = time.gmtime(time.time() + 8 * 3600)
     current_time_str = time.strftime("%Y-%m-%d %H:%M:%S", local_time)
 
-    masked_email = mask_email(email)  # 🆕 修改：改为按传入账号各自掩码
+    masked_email = mask_email(EMAIL)
 
     text = (
-        f"{flag} Lunes 保活通知\n\n"
+        f"Lunes 保活通知\n\n"
         f"{status_icon} {status_text}\n"
-        f"👤 登录账户: {name} {masked_email}\n"   # 🆕 修改：加上「账号N」标识，区分推送来源
+        f"👤 登录账户: {masked_email}\n"
         f"⏱️ 登录时间: {current_time_str}"
     )
     if extra_text:
         text += f"\n\n{extra_text}"
 
-    url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TG_CHAT_ID, "text": text}
+    payload = {"msg_type": "text", "content": {"text": text}}
+
+    # 机器人开启「签名校验」时，按飞书官方算法附加 timestamp + sign
+    # （HMAC-SHA256，key 为 "timestamp\nsecret"，内容为空串，结果 base64）
+    if FEISHU_SECRET:
+        timestamp = str(int(time.time()))
+        string_to_sign = f"{timestamp}\n{FEISHU_SECRET}"
+        sign = base64.b64encode(
+            hmac.new(string_to_sign.encode("utf-8"), digestmod=hashlib.sha256).digest()
+        ).decode()
+        payload["timestamp"] = timestamp
+        payload["sign"] = sign
 
     try:
-        r = requests.post(url, json=payload, timeout=10)
+        r = requests.post(FEISHU_WEBHOOK_URL, json=payload, timeout=10)
         if r.status_code == 200:
-            print("📩 Telegram 通知发送成功！")
+            print("📩 飞书通知发送成功！")
         else:
-            print(f"  ⚠️ Telegram 通知发送失败: {r.text}")
+            print(f"  ⚠️ 飞书通知发送失败: {r.text}")
     except Exception as e:
-        print(f"  ⚠️ Telegram 通知发送异常: {e}")
+        print(f"  ⚠️ 飞书通知发送异常: {e}")
 
 #  js注入脚本
 _EXPAND_JS = """
@@ -242,9 +242,7 @@ def handle_turnstile(sb) -> bool:
     print("  ❌ Turnstile 6 次均失败")
     return False
 
-# 🆕 修改：login 由读全局 EMAIL/PASSWORD 改为参数传入 (email, password)；
-#           新增 shot 参数，截图文件名带账号后缀，避免两个账号互相覆盖
-def login(sb, email: str, password: str, shot: str) -> bool:
+def login(sb, email: str, password: str) -> bool:
     print(f"🌐 打开登录页面: {LOGIN_URL}")
     sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=5)
     time.sleep(6)
@@ -272,7 +270,7 @@ def login(sb, email: str, password: str, shot: str) -> bool:
             page_title = sb.get_title() or ""
             print(f"  当前 URL: {cur_url}")
             print(f"  当前标题: {page_title}")
-            sb.save_screenshot(f"login_load_fail_{shot}.png")   # 🆕 修改：文件名带账号后缀
+            sb.save_screenshot("login_load_fail.png")
             return False
 
     print("🍪 关闭可能的 Cookie 弹窗...")
@@ -286,17 +284,17 @@ def login(sb, email: str, password: str, shot: str) -> bool:
         pass
 
     print(f"📧 填写邮箱...")
-    js_fill_input(sb, 'input[name="email"]', email)     # 🆕 修改：使用传入的账号
+    js_fill_input(sb, 'input[name="email"]', email)
     time.sleep(0.3)
 
     print("🔑 填写密码...")
-    js_fill_input(sb, 'input[name="password"]', password)  # 🆕 修改：使用传入的密码
+    js_fill_input(sb, 'input[name="password"]', password)
     time.sleep(1)
 
     if sb.execute_script(_EXISTS_JS):
         if not handle_turnstile(sb):
             print("❌ 登录界面的 Turnstile 验证失败")
-            sb.save_screenshot(f"login_turnstile_fail_{shot}.png")   # 🆕 修改：文件名带账号后缀
+            sb.save_screenshot("login_turnstile_fail.png")
             return False
     else:
         print("ℹ️ 未检测到 Turnstile")
@@ -319,7 +317,7 @@ def login(sb, email: str, password: str, shot: str) -> bool:
         return True
 
     print(f"❌ 登录失败，页面未跳转到账户页。(URL: {sb.get_current_url()}, Title: {page_title})")
-    sb.save_screenshot(f"login_failed_{shot}.png")   # 🆕 修改：文件名带账号后缀
+    sb.save_screenshot("login_failed.png")
     return False
 
 # 访问服务器页面
@@ -368,12 +366,24 @@ def visit_server(sb) -> (bool, dict):
     print(f"✅ 成功访问服务器: {server_name} (ID: {server_id})")
     return True, {"server_id": server_id, "server_name": server_name}
 
-# 🆕 新增：单账号完整流程（登录 → 访问服务器 → TG 推送）
-#           每个账号独立浏览器会话（cookie 隔离），异常就地捕获，不拖垮其他账号
-def run_account(sb_kwargs, acc) -> bool:
-    name = acc["name"]
+def main():
+    is_proxy = os.environ.get("IS_PROXY", "false").lower() == "true"
+    sb_kwargs = {"uc": True, "headless": False}
+
+    if is_proxy:
+        proxy_str = "http://127.0.0.1:1081"
+        print(f"🔗 挂载sing-box代理: {proxy_str}")
+        sb_kwargs["proxy"] = proxy_str
+    else:
+        print("🌐 未使用代理，直连访问")
+
+    # 账号完整性校验：缺一即退出，避免静默空跑
+    if not EMAIL or not PASSWORD:
+        print("❌ 未配置账号（LUNES_EMAIL/LUNES_PASSWORD 为空），退出。")
+        return
+
     print("\n" + "#" * 25)
-    print(f"   Lunes 自动登录续期 - {name}")
+    print("   Lunes 自动登录续期")
     print("#" * 25)
 
     try:
@@ -385,66 +395,25 @@ def run_account(sb_kwargs, acc) -> bool:
             except Exception:
                 pass
 
-            if login(sb, acc["email"], acc["password"], acc["shot"]):
+            if login(sb, EMAIL, PASSWORD):
                 success, info = visit_server(sb)
                 if success:
                     extra = f"服务器: {info['server_name']}\nID: {info['server_id']}"
-                    send_tg_message("✅", "续期成功", extra, email=acc["email"], name=name, flag=acc["flag"])
-                    return True
+                    send_feishu_message("✅", "续期成功", extra)
                 else:
                     error_msg = info.get('error', '未知错误')
                     print(f"❌ 访问服务器失败: {error_msg}")
                     extra = f"错误: {error_msg}"
                     if 'server_id' in info:
                         extra += f"\n服务器ID: {info['server_id']}"
-                    send_tg_message("❌", "续期失败", extra, email=acc["email"], name=name, flag=acc["flag"])
-                    return False
+                    send_feishu_message("❌", "续期失败", extra)
             else:
-                print(f"\n❌ {name} 登录失败，终止该账号后续续期操作。")
-                send_tg_message("❌", "登录失败", "", email=acc["email"], name=name, flag=acc["flag"])
-                return False
+                print("\n❌ 登录失败，终止后续续期操作。")
+                send_feishu_message("❌", "登录失败")
     except Exception as e:
-        # 🆕 新增：浏览器启动失败等未预期异常兜底，推送后继续下一个账号
-        print(f"❌ {name} 执行出现异常: {e}")
-        send_tg_message("❌", "执行异常", f"错误: {e}", email=acc["email"], name=name, flag=acc["flag"])
-        return False
-
-def main():
-    # 🆕 修改：代理与浏览器参数保留在 main 统一配置，流程改为逐账号循环
-    is_proxy = os.environ.get("IS_PROXY", "false").lower() == "true"
-    sb_kwargs = {"uc": True, "headless": False}
-
-    if is_proxy:
-        proxy_str = "http://127.0.0.1:1081"
-        print(f"🔗 挂载sing-box代理: {proxy_str}")
-        sb_kwargs["proxy"] = proxy_str
-    else:
-        print("🌐 未使用代理，直连访问")
-
-    # 🆕 新增：无可用账号时直接退出，避免静默空跑
-    if not ACCOUNTS:
-        print("❌ 未配置任何账号（LUNES_EMAIL/LUNES_PASSWORD 均为空），退出。")
-        return
-
-    print(f"📋 共配置 {len(ACCOUNTS)} 个账号，依次执行。")
-
-    # 🆕 新增：逐账号执行（各自独立浏览器会话），末尾汇总结果
-    results = []
-    for idx, acc in enumerate(ACCOUNTS):
-        ok = run_account(sb_kwargs, acc)
-        results.append((acc["name"], ok))
-        if idx < len(ACCOUNTS) - 1:
-            # 🆕 修改：账号间由固定 3 秒改为随机 1~3 分钟，模拟真人操作间隔，降低黑号风险
-            #          （推送在 run_account 内已完成，此处等待后再执行下一账号）
-            wait_seconds = random.randint(60, 180)
-            print(f"\n⏳ 随机等待 {wait_seconds} 秒（约 {wait_seconds / 60:.1f} 分钟）后执行下一账号，避免多账号行为过于规律...")
-            time.sleep(wait_seconds)
-
-    print("\n" + "=" * 40)
-    print("📊 全部账号执行完毕：")
-    for name, ok in results:
-        print(f"  {'✅' if ok else '❌'} {name}")
-    print("=" * 40)
+        # 浏览器启动失败等未预期异常兜底
+        print(f"❌ 执行出现异常: {e}")
+        send_feishu_message("❌", "执行异常", f"错误: {e}")
 
 if __name__ == "__main__":
     main()
