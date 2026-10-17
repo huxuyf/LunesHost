@@ -41,10 +41,8 @@ jobs:
         env:
           LUNES_EMAIL: ${{ secrets.LUNES_EMAIL }}
           LUNES_PASSWORD: ${{ secrets.LUNES_PASSWORD }}
-          LUNES_EMAIL1: ${{ secrets.LUNES_EMAIL1 }}       # 账号2（可选，不配则自动跳过）
-          LUNES_PASSWORD1: ${{ secrets.LUNES_PASSWORD1 }} # 账号2 密码
-          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}  # 飞书自定义机器人 webhook（可选）
+          FEISHU_SECRET: ${{ secrets.FEISHU_SECRET }}            # 飞书机器人签名密钥（可选）
         run: |
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
           python3 app.py
