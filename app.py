@@ -242,7 +242,7 @@ def handle_turnstile(sb) -> bool:
     print("  ❌ Turnstile 6 次均失败")
     return False
 
-def login(sb, email: str, password: str) -> bool:
+def _login_once(sb, email: str, password: str) -> bool:
     print(f"🌐 打开登录页面: {LOGIN_URL}")
     sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=5)
     time.sleep(6)
@@ -291,13 +291,23 @@ def login(sb, email: str, password: str) -> bool:
     js_fill_input(sb, 'input[name="password"]', password)
     time.sleep(1)
 
-    if sb.execute_script(_EXISTS_JS):
+    # 轮询等待 Turnstile 控件渲染（CF 有时延迟出控件，不能只等 1 秒就判定“无验证”）
+    has_turnstile = False
+    for i in range(20):
+        if sb.execute_script(_EXISTS_JS):
+            has_turnstile = True
+            if i > 0:
+                print(f"ℹ️ Turnstile 控件延迟渲染，等待 {i}s 后出现")
+            break
+        time.sleep(1)
+
+    if has_turnstile:
         if not handle_turnstile(sb):
             print("❌ 登录界面的 Turnstile 验证失败")
             sb.save_screenshot("login_turnstile_fail.png")
             return False
     else:
-        print("ℹ️ 未检测到 Turnstile")
+        print("ℹ️ 等待 20s 仍未检测到 Turnstile")
 
     print("🖱️ 点击登录按钮提交登录...")
     sb.click('button[type="submit"]')
@@ -316,8 +326,21 @@ def login(sb, email: str, password: str) -> bool:
         print(f"✅ 登录成功！(URL: {sb.get_current_url()}, Title: {page_title})")
         return True
 
+    page_src = sb.get_page_source() or ""
+    if "Complete the login verification" in page_src:
+        print("  ⚠️ 服务端要求重新完成登录验证（说明 Turnstile token 为空）")
     print(f"❌ 登录失败，页面未跳转到账户页。(URL: {sb.get_current_url()}, Title: {page_title})")
     sb.save_screenshot("login_failed.png")
+    return False
+
+def login(sb, email: str, password: str) -> bool:
+    """登录整体重试：被 CF 拒绝（空 token 提交）时重新打开登录页再挑战一次"""
+    for attempt in range(1, 3):
+        if _login_once(sb, email, password):
+            return True
+        if attempt == 1:
+            print("🔁 登录未成功，重新打开登录页再挑战（第 2 次尝试）...")
+            time.sleep(5)
     return False
 
 # 访问服务器页面
